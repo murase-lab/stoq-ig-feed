@@ -71,3 +71,5 @@ jobs:
             curl -s "$base/$f" -o /dev/null || true
           done
           echo "purge 要求を送信しました"
+
+# trigger registration
