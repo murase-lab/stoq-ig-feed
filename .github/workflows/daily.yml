@@ -31,8 +31,9 @@ jobs:
 
       # 2) GH_PAT があれば延長トークンを Secret に恒久化（完全放置運用）。
       #    未設定ならスキップ（約60日ごとに META_ACCESS_TOKEN を手動更新）。
-      - name: 延長トークンを Secret に恒久化（任意）
+      - name: 延長トークンを Secret に恒久化（任意・失敗してもフィード更新は続行）
         if: ${{ steps.tok.outputs.token != '' }}
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           NEW_TOKEN: ${{ steps.tok.outputs.token }}
@@ -41,8 +42,11 @@ jobs:
             echo "GH_PAT 未設定のため Secret 恒久化をスキップ"
             exit 0
           fi
-          gh secret set META_ACCESS_TOKEN --repo "${{ github.repository }}" --body "$NEW_TOKEN"
-          echo "Secret META_ACCESS_TOKEN を更新しました"
+          if gh secret set META_ACCESS_TOKEN --repo "${{ github.repository }}" --body "$NEW_TOKEN"; then
+            echo "Secret META_ACCESS_TOKEN を更新しました"
+          else
+            echo "⚠ Secret更新に失敗（GH_PATの権限/対象リポジトリを確認）。フィード更新は続行します。"
+          fi
 
       # 3) 最新6投稿を取得 → feed/ を更新
       - name: フィード取得
