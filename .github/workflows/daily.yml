@@ -1,0 +1,73 @@
+name: Instagram フィード自動更新（毎朝07:00 JST）
+
+on:
+  schedule:
+    - cron: "0 22 * * *"   # 22:00 UTC = 07:00 JST
+  workflow_dispatch:
+
+concurrency:
+  group: ig-feed
+  cancel-in-progress: false
+
+permissions:
+  contents: write          # feed/ をこのリポジトリに push するため
+
+jobs:
+  update-feed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # 1) Instagram 長期トークンを +60日 延長
+      - name: Instagram トークンを更新
+        id: tok
+        env:
+          META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
+        run: node scripts/refresh-instagram-token.mjs
+
+      # 2) GH_PAT があれば延長トークンを Secret に恒久化（完全放置運用）。
+      #    未設定ならスキップ（約60日ごとに META_ACCESS_TOKEN を手動更新）。
+      - name: 延長トークンを Secret に恒久化（任意）
+        if: ${{ steps.tok.outputs.token != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          NEW_TOKEN: ${{ steps.tok.outputs.token }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "GH_PAT 未設定のため Secret 恒久化をスキップ"
+            exit 0
+          fi
+          gh secret set META_ACCESS_TOKEN --repo "${{ github.repository }}" --body "$NEW_TOKEN"
+          echo "Secret META_ACCESS_TOKEN を更新しました"
+
+      # 3) 最新6投稿を取得 → feed/ を更新
+      - name: フィード取得
+        env:
+          META_ACCESS_TOKEN: ${{ steps.tok.outputs.token != '' && steps.tok.outputs.token || secrets.META_ACCESS_TOKEN }}
+        run: node scripts/fetch-instagram-feed.mjs
+
+      # 4) feed/ をコミット & push（差分があるときだけ）
+      - name: コミット & push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add feed/
+          if git diff --cached --quiet; then
+            echo "差分なし（push スキップ）"
+          else
+            git commit -m "chore: update instagram feed ($(date -u +%Y-%m-%d))"
+            git push
+          fi
+
+      # 5) jsDelivr のエッジキャッシュを purge（即時反映）。失敗しても続行。
+      - name: jsDelivr キャッシュ purge
+        run: |
+          base="https://purge.jsdelivr.net/gh/${{ github.repository }}@master/feed"
+          for f in instagram-feed.json ig-feed-1.jpg ig-feed-2.jpg ig-feed-3.jpg ig-feed-4.jpg ig-feed-5.jpg ig-feed-6.jpg; do
+            curl -s "$base/$f" -o /dev/null || true
+          done
+          echo "purge 要求を送信しました"
